@@ -30,7 +30,7 @@ import LocalMusicSheet from "./localMusicSheet";
 import Mp3Util from "@/native/mp3Util";
 import { PluginMeta } from "./pluginMeta";
 import { useEffect, useState } from "react";
-import { addFileScheme, getFileName } from "@/utils/fileUtils";
+import { addFileScheme, getFileName, escapeCharacter } from "@/utils/fileUtils";
 import { URL } from "react-native-url-polyfill";
 import Base64 from "@/utils/base64";
 import MediaCache from "./mediaCache";
@@ -38,6 +38,8 @@ import { produce } from "immer";
 import objectPath from "object-path";
 import notImplementedFunction from "@/utils/notImplementedFunction.ts";
 import { readAsStringAsync } from "expo-file-system";
+import MusicItem from "@/components/mediaItem/musicItem";
+import { getQualityOrder } from "@/utils/qualities";
 
 axios.defaults.timeout = 2000;
 
@@ -145,7 +147,7 @@ export class Plugin {
     ) {
         this.state = 'enabled';
         let _instance: IPlugin.IPluginInstance;
-        const _module: any = {exports: {}};
+        const _module: any = { exports: {} };
         try {
             if (typeof funcCode === 'string') {
                 // 插件的环境变量
@@ -358,25 +360,34 @@ class PluginMethods implements IPlugin.IPluginInstanceMethods {
                     mediaCache.userAgent ?? mediaCache.headers?.['user-agent'],
             };
         }
+
+        // 2. 检查 WebDAV 上是否存在
+        const webdavPath = await this.checkWebDAVMusic(musicItem);
+        if (webdavPath) {
+            return {
+                url: webdavPath
+            };
+        }
+
         // 3. 插件解析
         if (!this.plugin.instance.getMediaSource) {
-            const {url, auth} = formatAuthUrl(
+            const { url, auth } = formatAuthUrl(
                 musicItem?.qualities?.[quality]?.url ?? musicItem.url,
             );
             return {
                 url: url,
                 headers: auth
                     ? {
-                          Authorization: auth,
-                      }
+                        Authorization: auth,
+                    }
                     : undefined,
             };
         }
         try {
-            const {url, headers} = (await this.plugin.instance.getMediaSource(
+            const { url, headers } = (await this.plugin.instance.getMediaSource(
                 musicItem,
                 quality,
-            )) ?? {url: musicItem?.qualities?.[quality]?.url};
+            )) ?? { url: musicItem?.qualities?.[quality]?.url };
             if (!url) {
                 throw new Error('NOT RETRY');
             }
@@ -447,6 +458,56 @@ class PluginMethods implements IPlugin.IPluginInstanceMethods {
         }
     }
 
+    // 检查 WebDAV 上是否存在音乐文件
+    async checkWebDAVMusic(musicItem: IMusic.IMusicItemBase, quality: IMusic.IQualityKey = 'standard'): Promise<string | null> {
+        try {
+            if (!musicItem) {
+                return null;
+            }
+
+            //devLog("info", "musicItem++++++++33:", musicItem);
+            let url = "https://git.fzwise.com:81/music";
+            let source = musicItem.url;
+
+            if (!this.plugin.instance.getMediaSource) {
+                source = musicItem?.qualities?.[quality]?.url ?? musicItem.url;
+            }
+
+            // 使用获取到的URL构建WebDAV路径
+            let ext = source?.match(/.*\/.+\.([^./?#]+)/)?.[1] ?? "m4s";
+            let fileName = `${musicItem.title}-${musicItem.artist}`.replace(/[/|\\?*"<>:]/g, "_");
+
+            let webdavUrl = new URL(url);
+            let webdavPath = `${webdavUrl.toString()}/${fileName}.${ext}`;
+            devLog("info", "WebDav路径:", webdavPath);
+            let response = await fetch(webdavPath, {
+                method: "HEAD",
+            });
+
+            if (!response.ok) {
+                if (ext === "mp3") {
+                    ext = "m4s";
+                } else {
+                    ext = "mp3";
+                }
+                webdavPath = `${webdavUrl.toString()}/${fileName}.${ext}`;
+                devLog("info", "WebDav路径:", webdavPath);
+                response = await fetch(webdavPath, {
+                    method: "HEAD",
+                });
+                if (response.ok) {
+                    return webdavPath;
+                }
+            }
+            else {
+                return webdavPath;
+            }
+        } catch (e) {
+            devLog('error', '检查 WebDAV 音乐失败', e);
+        }
+        return null;
+    }
+
     /**
      *
      * getLyric(musicItem) => {
@@ -494,19 +555,19 @@ class PluginMethods implements IPlugin.IPluginInstanceMethods {
             if (
                 await RNFS.exists(
                     pathConst.localLrcPath +
-                        platformHash +
-                        '/' +
-                        idHash +
-                        '.tran.lrc',
+                    platformHash +
+                    '/' +
+                    idHash +
+                    '.tran.lrc',
                 )
             ) {
                 translation =
                     (await RNFS.readFile(
                         pathConst.localLrcPath +
-                            platformHash +
-                            '/' +
-                            idHash +
-                            '.tran.lrc',
+                        platformHash +
+                        '/' +
+                        idHash +
+                        '.tran.lrc',
                         'utf8',
                     )) || null;
             }
@@ -586,19 +647,17 @@ class PluginMethods implements IPlugin.IPluginInstanceMethods {
             const deprecatedLrcUrl = lrcSource?.lrc || musicItem.lrc;
 
             // 本地的文件名
-            let filename: string | undefined = `${
-                pathConst.lrcCachePath
-            }${nanoid()}.lrc`;
-            let filenameTrans: string | undefined = `${
-                pathConst.lrcCachePath
-            }${nanoid()}.lrc`;
+            let filename: string | undefined = `${pathConst.lrcCachePath
+                }${nanoid()}.lrc`;
+            let filenameTrans: string | undefined = `${pathConst.lrcCachePath
+                }${nanoid()}.lrc`;
 
             // 旧版本兼容
             if (!(rawLrc || translation)) {
                 if (deprecatedLrcUrl) {
                     rawLrc = (
                         await axios
-                            .get(deprecatedLrcUrl, {timeout: 3000})
+                            .get(deprecatedLrcUrl, { timeout: 3000 })
                             .catch(() => null)
                     )?.data;
                 } else if (musicItem.rawLrc) {
@@ -695,7 +754,7 @@ class PluginMethods implements IPlugin.IPluginInstanceMethods {
             if (page <= 1) {
                 // 合并信息
                 return {
-                    albumItem: {...albumItem, ...(result?.albumItem ?? {})},
+                    albumItem: { ...albumItem, ...(result?.albumItem ?? {}) },
                     isEnd: result.isEnd === false ? false : true,
                     musicList: result.musicList,
                 };
@@ -740,7 +799,7 @@ class PluginMethods implements IPlugin.IPluginInstanceMethods {
             if (page <= 1) {
                 // 合并信息
                 return {
-                    sheetItem: {...sheetItem, ...(result?.sheetItem ?? {})},
+                    sheetItem: { ...sheetItem, ...(result?.sheetItem ?? {}) },
                     isEnd: result.isEnd === false ? false : true,
                     musicList: result.musicList,
                 };
@@ -945,7 +1004,7 @@ class PluginMethods implements IPlugin.IPluginInstanceMethods {
     async migrateFromOtherPlugin(
         mediaItem: ICommon.IMediaBase,
         fromPlatform: string,
-    ): Promise<{isOk: boolean; data?: ICommon.IMediaBase}> {
+    ): Promise<{ isOk: boolean; data?: ICommon.IMediaBase }> {
         try {
             const result = await this.plugin.instance?.migrateFromOtherPlugin(
                 mediaItem,
@@ -1019,14 +1078,14 @@ const localFilePlugin = new Plugin(function () {
                         if (await exists(lrcPath)) {
                             rawLrc = await readFile(lrcPath, 'utf8');
                         }
-                    } catch {}
+                    } catch { }
                 }
             }
 
             return rawLrc
                 ? {
-                      rawLrc,
-                  }
+                    rawLrc,
+                }
                 : null;
         },
         async importMusicItem(urlLike) {
@@ -1180,7 +1239,7 @@ async function installPluginFromLocalFile(
                 plugins = plugins.filter(_ => _.hash !== oldVersionPlugin.hash);
                 try {
                     await unlink(oldVersionPlugin.path);
-                } catch {}
+                } catch { }
             }
             const _pluginPath = `${pathConst.pluginPath}${fn}.js`;
             await copyFile(pluginPath, _pluginPath);
@@ -1208,7 +1267,7 @@ async function installPluginFromLocalFile(
 async function installPluginFromUrl(
     url: string,
     config?: IInstallPluginConfig,
-) : Promise<IInstallPluginResult> {
+): Promise<IInstallPluginResult> {
     try {
         const funcCode = (
             await axios.get(url, {
@@ -1263,7 +1322,7 @@ async function installPluginFromUrl(
                     );
                     try {
                         await unlink(oldVersionPlugin.path);
-                    } catch {}
+                    } catch { }
                 }
                 pluginStateMapper.notify();
                 return {
@@ -1318,7 +1377,7 @@ async function uninstallPlugin(hash: string) {
             if (plugins.every(_ => _.name !== pluginName)) {
                 MediaExtra.removeAll(pluginName);
             }
-        } catch {}
+        } catch { }
     }
 }
 
@@ -1329,7 +1388,7 @@ async function uninstallAllPlugins() {
                 const pluginName = plugin.name;
                 await unlink(plugin.path);
                 MediaExtra.removeAll(pluginName);
-            } catch (e) {}
+            } catch (e) { }
         }),
     );
     plugins = [];
@@ -1398,7 +1457,7 @@ function getSortedSearchablePlugins(
     return getSearchablePlugins(supportedSearchType).sort((a, b) =>
         (PluginMeta.getPluginMeta(a).order ?? Infinity) -
             (PluginMeta.getPluginMeta(b).order ?? Infinity) <
-        0
+            0
             ? -1
             : 1,
     );
@@ -1412,7 +1471,7 @@ function getSortedTopListsablePlugins() {
     return getTopListsablePlugins().sort((a, b) =>
         (PluginMeta.getPluginMeta(a).order ?? Infinity) -
             (PluginMeta.getPluginMeta(b).order ?? Infinity) <
-        0
+            0
             ? -1
             : 1,
     );
@@ -1428,7 +1487,7 @@ function getSortedRecommendSheetablePlugins() {
     return getRecommendSheetablePlugins().sort((a, b) =>
         (PluginMeta.getPluginMeta(a).order ?? Infinity) -
             (PluginMeta.getPluginMeta(b).order ?? Infinity) <
-        0
+            0
             ? -1
             : 1,
     );
@@ -1442,7 +1501,7 @@ function useSortedPlugins() {
         [..._plugins].sort((a, b) =>
             (_pluginMetaAll[a.name]?.order ?? Infinity) -
                 (_pluginMetaAll[b.name]?.order ?? Infinity) <
-            0
+                0
                 ? -1
                 : 1,
         ),
@@ -1454,7 +1513,7 @@ function useSortedPlugins() {
                 [..._plugins].sort((a, b) =>
                     (_pluginMetaAll[a.name]?.order ?? Infinity) -
                         (_pluginMetaAll[b.name]?.order ?? Infinity) <
-                    0
+                        0
                         ? -1
                         : 1,
                 ),

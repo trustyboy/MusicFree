@@ -3,9 +3,11 @@ buildscript {
         buildToolsVersion = "35.0.0"
         minSdkVersion = 24
         compileSdkVersion = 35
-        targetSdkVersion = 30
+        targetSdkVersion = 34
         ndkVersion = "26.1.10909125"
         kotlinVersion = "1.9.24"
+        JavaVersion.VERSION_17
+        kotlinJvmTarget = "17"
     }
     repositories {
         maven { url 'https://maven.aliyun.com/repository/public' }
@@ -21,3 +23,11 @@ buildscript {
     }
 }
 apply plugin: "com.facebook.react.rootproject"
+
+subprojects {
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+        }
+    }
+}
