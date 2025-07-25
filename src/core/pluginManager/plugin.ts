@@ -7,7 +7,7 @@ import pathConst from "@/constants/pathConst";
 import Mp3Util from "@/native/mp3Util";
 import Base64 from "@/utils/base64";
 import delay from "@/utils/delay";
-import { addFileScheme, getFileName } from "@/utils/fileUtils";
+import { addFileScheme, getFileName, escapeCharacter } from "@/utils/fileUtils";
 import { getMediaExtraProperty, patchMediaExtra } from "@/utils/mediaExtra";
 import { getLocalPath, isSameMediaItem, resetMediaItem } from "@/utils/mediaUtils";
 import notImplementedFunction from "@/utils/notImplementedFunction.ts";
@@ -31,7 +31,8 @@ import Network from "../../utils/network";
 import MediaCache from "../mediaCache";
 import _internalPluginMeta from "./meta";
 import { IPluginManager } from "@/types/core/pluginManager";
-
+import MusicItem from "@/components/mediaItem/musicItem";
+import { getQualityOrder } from "@/utils/qualities";
 
 axios.defaults.timeout = 2000;
 axios.interceptors.response.use((response) => {
@@ -227,6 +228,15 @@ class PluginMethodsWrapper implements IPlugin.IPluginInstanceMethods {
                     mediaCache.userAgent ?? mediaCache.headers?.["user-agent"],
             };
         }
+
+        // 检查 WebDAV 上是否存在
+        const webdavPath = await this.checkWebDAVMusic(musicItem);
+        if (webdavPath) {
+            return {
+                url: webdavPath
+            };
+        }
+
         // 3. 替代插件
         const alternativePlugin = Plugin.pluginManager?.getAlternativePlugin(this.plugin) as Plugin | null;
         const parserPlugin = alternativePlugin?.instance?.getMediaSource ? alternativePlugin : this.plugin;
@@ -322,6 +332,56 @@ class PluginMethodsWrapper implements IPlugin.IPluginInstanceMethods {
             devLog("error", "获取音乐详情失败", e, e?.message);
             return null;
         }
+    }
+
+    // 检查 WebDAV 上是否存在音乐文件
+    async checkWebDAVMusic(musicItem: IMusic.IMusicItemBase, quality: IMusic.IQualityKey = 'standard'): Promise<string | null> {
+        try {
+            if (!musicItem) {
+                return null;
+            }
+
+            //devLog("info", "musicItem++++++++33:", musicItem);
+            let url = "https://git.fzwise.com:81/music";
+            let source = musicItem.url;
+
+            if (!this.plugin.instance.getMediaSource) {
+                source = musicItem?.qualities?.[quality]?.url ?? musicItem.url;
+            }
+
+            // 使用获取到的URL构建WebDAV路径
+            let ext = source?.match(/.*\/.+\.([^./?#]+)/)?.[1] ?? "m4s";
+            let fileName = `${musicItem.title}-${musicItem.artist}`.replace(/[/|\\?*"<>:]/g, "_");
+
+            let webdavUrl = new URL(url);
+            let webdavPath = `${webdavUrl.toString()}/${fileName}.${ext}`;
+            devLog("info", "WebDav路径:", webdavPath);
+            let response = await fetch(webdavPath, {
+                method: "HEAD",
+            });
+
+            if (!response.ok) {
+                if (ext === "mp3") {
+                    ext = "m4s";
+                } else {
+                    ext = "mp3";
+                }
+                webdavPath = `${webdavUrl.toString()}/${fileName}.${ext}`;
+                devLog("info", "WebDav路径:", webdavPath);
+                response = await fetch(webdavPath, {
+                    method: "HEAD",
+                });
+                if (response.ok) {
+                    return webdavPath;
+                }
+            }
+            else {
+                return webdavPath;
+            }
+        } catch (e) {
+            devLog('error', '检查 WebDAV 音乐失败', e);
+        }
+        return null;
     }
 
     /**
