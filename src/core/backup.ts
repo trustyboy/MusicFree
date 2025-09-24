@@ -29,7 +29,7 @@ function backup() {
     return JSON.stringify({
         musicSheets: musicSheets,
         plugins: normalizedPlugins,
-    });
+    }, null, 2);
 }
 
 async function resume(

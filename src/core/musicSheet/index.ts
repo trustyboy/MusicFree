@@ -234,46 +234,41 @@ class MusicSheetClazz implements IInjectable {
         sheets: IMusic.IMusicSheetItem[],
         resumeMode: ResumeMode,
     ) {
-        if (resumeMode === ResumeMode.Append) {
-            // 逆序恢复，最新创建的在最上方
-            for (let i = sheets.length - 1; i >= 0; --i) {
-                const newSheetId = await this.addSheet(sheets[i].title || "");
-                await this.addMusic(newSheetId, sheets[i].musicList || []);
+        // Overwrite mode
+        // 1. Clear all existing data
+        const currentSheets = [...getDefaultStore().get(musicSheetsBaseAtom)];
+        for (const sheet of currentSheets) {
+            if (sheet.id === this.defaultSheet.id) {
+                // Clear the default sheet
+                const musicList = this.getSortedMusicListBySheetId(this.defaultSheet.id);
+                const musicItems = musicList.musicList;
+                musicList.remove(musicItems);
+                await storage.setMusicList(this.defaultSheet.id, []);
+                await this.updateMusicSheetBase(this.defaultSheet.id, { worksNum: 0 });
+            } else {
+                // Remove other sheets
+                await this.removeSheet(sheet.id);
             }
-            return;
         }
-        // 1. 分离默认歌单和其他歌单
+
+        // 2. Restore from backup
         const defaultSheetIndex = sheets.findIndex(it => it.id === _defaultSheet.id);
-
         let exportedDefaultSheet: IMusic.IMusicSheetItem | null = null;
-
         if (defaultSheetIndex !== -1) {
             exportedDefaultSheet = sheets.splice(defaultSheetIndex, 1)[0];
         }
 
-        // 2. 合并默认歌单
-        await this.addMusic(_defaultSheet.id, exportedDefaultSheet?.musicList || []);
+        // Restore default sheet songs
+        if (exportedDefaultSheet?.musicList?.length) {
+            await this.addMusic(_defaultSheet.id, exportedDefaultSheet.musicList, { useIncrementingTimestamp: true });
+        }
 
-        // 3. 合并其他歌单
-        if (resumeMode === ResumeMode.OverwriteDefault) {
-            // 逆序恢复，最新创建的在最上方
-            for (let i = sheets.length - 1; i >= 0; --i) {
-                const newSheetId = await this.addSheet(sheets[i].title || "");
-                await this.addMusic(newSheetId, sheets[i].musicList || []);
-            }
-        } else {
-            // 合并同名
-            const existsSheetIdMap: Record<string, string> = {};
-            const allSheets = getDefaultStore().get(musicSheetsBaseAtom);
-            allSheets.forEach(it => {
-                existsSheetIdMap[it.title!] = it.id;
-            });
-            for (let i = sheets.length - 1; i >= 0; --i) {
-                let newSheetId = existsSheetIdMap[sheets[i].title || ""];
-                if (!newSheetId) {
-                    newSheetId = await this.addSheet(sheets[i].title || "");
-                }
-                await this.addMusic(newSheetId, sheets[i].musicList || []);
+        // Restore other sheets
+        for (let i = sheets.length - 1; i >= 0; --i) {
+            const sheetFromBackup = sheets[i];
+            const newSheetId = await this.addSheet(sheetFromBackup.title || "");
+            if (sheetFromBackup.musicList?.length) {
+                await this.addMusic(newSheetId, sheetFromBackup.musicList, { useIncrementingTimestamp: true });
             }
         }
     }
@@ -310,6 +305,7 @@ class MusicSheetClazz implements IInjectable {
     async addMusic(
         sheetId: string,
         musicItem: IMusic.IMusicItem | Array<IMusic.IMusicItem>,
+        options?: { useIncrementingTimestamp?: boolean }
     ) {
         const now = Date.now();
         if (!Array.isArray(musicItem)) {
@@ -317,7 +313,7 @@ class MusicSheetClazz implements IInjectable {
         }
         const taggedMusicItems = musicItem.map((it, index) => ({
             ...it,
-            $timestamp: now,
+            $timestamp: options?.useIncrementingTimestamp ? now + index * 1000 : now,
             $sortIndex: musicItem.length - index,
         }));
 
