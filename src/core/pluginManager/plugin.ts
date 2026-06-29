@@ -7,7 +7,7 @@ import pathConst from "@/constants/pathConst";
 import Mp3Util from "@/native/mp3Util";
 import Base64 from "@/utils/base64";
 import delay from "@/utils/delay";
-import { addFileScheme, getFileName, escapeCharacter } from "@/utils/fileUtils";
+import { addFileScheme, getFileName } from "@/utils/fileUtils";
 import { getMediaExtraProperty, patchMediaExtra } from "@/utils/mediaExtra";
 import { getLocalPath, isSameMediaItem, resetMediaItem } from "@/utils/mediaUtils";
 import notImplementedFunction from "@/utils/notImplementedFunction.ts";
@@ -31,8 +31,6 @@ import Network from "../../utils/network";
 import MediaCache from "../mediaCache";
 import _internalPluginMeta from "./meta";
 import { IPluginManager } from "@/types/core/pluginManager";
-import MusicItem from "@/components/mediaItem/musicItem";
-import { getQualityOrder } from "@/utils/qualities";
 
 axios.defaults.timeout = 2000;
 axios.interceptors.response.use((response) => {
@@ -249,7 +247,7 @@ class PluginMethodsWrapper implements IPlugin.IPluginInstanceMethods {
         const webdavPath = await this.checkWebDAVMusic(musicItem);
         if (webdavPath) {
             return {
-                url: webdavPath
+                url: webdavPath,
             };
         }
 
@@ -351,8 +349,29 @@ class PluginMethodsWrapper implements IPlugin.IPluginInstanceMethods {
         }
     }
 
-    // 检查 WebDAV 上是否存在音乐文件
-    async checkWebDAVMusic(musicItem: IMusic.IMusicItemBase, quality: IMusic.IQualityKey = 'standard'): Promise<string | null> {
+    /**
+     * 根据原始音源扩展名生成 WebDAV 缓存候选扩展名。
+     * @param source 原始音源地址，用于推断插件返回的文件扩展名。
+     * @returns 去重后的候选扩展名列表，越靠前优先级越高。
+     */
+    private getWebDAVCandidateExts(source?: string): string[] {
+        const sourceExt =
+            source?.match(/.*\/.+\.([^./?#]+)/)?.[1]?.toLowerCase() ?? "m4s";
+        const candidateExts =
+            sourceExt === "m4s"
+                ? ["mp4", "m4a", "m4s", "mp3"]
+                : [sourceExt, "mp4", "m4a", "m4s", "mp3"];
+
+        return Array.from(new Set(candidateExts));
+    }
+
+    /**
+     * 检查 WebDAV 上是否存在音乐缓存文件。
+     * @param musicItem 待播放的音乐条目。
+     * @param quality 当前请求的音质，用于在无解析插件时读取原始音源地址。
+     * @returns 命中的 WebDAV 音乐直链；不存在或检查失败时返回 null。
+     */
+    async checkWebDAVMusic(musicItem: IMusic.IMusicItemBase, quality: IMusic.IQualityKey = "standard"): Promise<string | null> {
         try {
             if (!musicItem) {
                 return null;
@@ -366,37 +385,24 @@ class PluginMethodsWrapper implements IPlugin.IPluginInstanceMethods {
                 source = musicItem?.qualities?.[quality]?.url ?? musicItem.url;
             }
 
-            // 使用获取到的URL构建WebDAV路径
-            let ext = source?.match(/.*\/.+\.([^./?#]+)/)?.[1] ?? "m4s";
+            // 使用获取到的 URL 推断候选扩展名，m4s 优先尝试 mp4/m4a 以兼容 Android 播放器。
+            const candidateExts = this.getWebDAVCandidateExts(source);
             let fileName = `${musicItem.title}-${musicItem.artist}`.replace(/[/|\\?*"<>:]/g, "_");
 
             let webdavUrl = new URL(url);
-            let webdavPath = `${webdavUrl.toString()}/${fileName}.${ext}`;
-            devLog("info", "WebDav路径:", webdavPath);
-            let response = await fetch(webdavPath, {
-                method: "HEAD",
-            });
-
-            if (!response.ok) {
-                if (ext === "mp3") {
-                    ext = "m4s";
-                } else {
-                    ext = "mp3";
-                }
-                webdavPath = `${webdavUrl.toString()}/${fileName}.${ext}`;
+            for (const ext of candidateExts) {
+                const webdavPath = `${webdavUrl.toString()}/${fileName}.${ext}`;
                 devLog("info", "WebDav路径:", webdavPath);
-                response = await fetch(webdavPath, {
+                const response = await fetch(webdavPath, {
                     method: "HEAD",
                 });
+
                 if (response.ok) {
                     return webdavPath;
                 }
             }
-            else {
-                return webdavPath;
-            }
         } catch (e) {
-            devLog('error', '检查 WebDAV 音乐失败', e);
+            devLog("error", "检查 WebDAV 音乐失败", e);
         }
         return null;
     }
@@ -1177,4 +1183,3 @@ const localFilePluginDefine: IPlugin.IPluginDefine = {
 export const localFilePlugin = new Plugin(function () {
     return localFilePluginDefine;
 }, "internal-plugin://local-file-plugin");
-
